@@ -1,0 +1,125 @@
+---
+# Secret: Post Service DB credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: post-db-secret
+  namespace: social-app
+  labels:
+    app: post-service
+type: Opaque
+data:
+  # REPLACE THESE before deploying to production!
+  db-username: cG9zdGdyZXM=        # postgres
+  db-password: cG9zdHBhc3N3b3Jk   # postpassword
+
+---
+# ConfigMap: Post Service DB config
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: post-db-config
+  namespace: social-app
+  labels:
+    app: post-service
+data:
+  db-url: "jdbc:postgresql://post-db-service:5432/postdb"
+  db-name: "postdb"
+
+---
+# PersistentVolumeClaim for Post DB
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: post-db-pvc
+  namespace: social-app
+  labels:
+    app: post-db
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# PostgreSQL Deployment for Post Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: post-db
+  namespace: social-app
+  labels:
+    app: post-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: post-db
+  template:
+    metadata:
+      labels:
+        app: post-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: post-db-config
+                  key: db-name
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: post-db-secret
+                  key: db-username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: post-db-secret
+                  key: db-password
+          volumeMounts:
+            - name: post-db-storage
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "postdb"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "postdb"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: post-db-storage
+          persistentVolumeClaim:
+            claimName: post-db-pvc
+
+---
+# ClusterIP Service for Post DB
+apiVersion: v1
+kind: Service
+metadata:
+  name: post-db-service
+  namespace: social-app
+  labels:
+    app: post-db
+spec:
+  selector:
+    app: post-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP

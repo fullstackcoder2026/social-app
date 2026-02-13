@@ -1,0 +1,115 @@
+---
+# Deployment: User Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: social-app
+  labels:
+    app: user-service
+    version: "1.0.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+        version: "1.0.0"
+    spec:
+      containers:
+        - name: user-service
+          # REPLACE 'your-dockerhub-username' with your Docker Hub username
+          image: your-dockerhub-username/user-service:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: DB_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: user-db-config
+                  key: db-url
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: user-db-secret
+                  key: db-username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-db-secret
+                  key: db-password
+            - name: DDL_AUTO
+              value: "update"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          # Liveness probe: restart pod if app is hung
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+          # Readiness probe: only send traffic when app is ready
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+      # Wait for DB to be ready before starting
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command: ['sh', '-c',
+            'until nc -z user-db-service 5432; do echo "Waiting for PostgreSQL..."; sleep 3; done']
+
+---
+# ClusterIP Service: exposes user-service internally on port 8080
+# Other pods call it at: http://user-service.social-app.svc.cluster.local:8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: social-app
+  labels:
+    app: user-service
+spec:
+  selector:
+    app: user-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# OpenShift Route: exposes user-service externally via HTTP
+# Access at: http://user-service-social-app.<cluster-domain>
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: user-service-route
+  namespace: social-app
+  labels:
+    app: user-service
+spec:
+  to:
+    kind: Service
+    name: user-service
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

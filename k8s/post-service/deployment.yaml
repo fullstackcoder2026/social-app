@@ -1,0 +1,118 @@
+---
+# Deployment: Post Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: post-service
+  namespace: social-app
+  labels:
+    app: post-service
+    version: "1.0.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: post-service
+  template:
+    metadata:
+      labels:
+        app: post-service
+        version: "1.0.0"
+    spec:
+      containers:
+        - name: post-service
+          # REPLACE 'your-dockerhub-username' with your Docker Hub username
+          image: your-dockerhub-username/post-service:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: DB_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: post-db-config
+                  key: db-url
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: post-db-secret
+                  key: db-username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: post-db-secret
+                  key: db-password
+            - name: DDL_AUTO
+              value: "update"
+            # ── Inter-service: resolve user-service via K8s DNS ─────────
+            - name: USER_SERVICE_URL
+              value: "http://user-service.social-app.svc.cluster.local:8080"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+      # Wait for post-db AND user-service to be reachable
+      initContainers:
+        - name: wait-for-post-db
+          image: busybox:1.36
+          command: ['sh', '-c',
+            'until nc -z post-db-service 5432; do echo "Waiting for Post DB..."; sleep 3; done']
+        - name: wait-for-user-service
+          image: busybox:1.36
+          command: ['sh', '-c',
+            'until nc -z user-service 8080; do echo "Waiting for user-service..."; sleep 3; done']
+
+---
+# ClusterIP Service: exposes post-service internally
+apiVersion: v1
+kind: Service
+metadata:
+  name: post-service
+  namespace: social-app
+  labels:
+    app: post-service
+spec:
+  selector:
+    app: post-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# OpenShift Route: exposes post-service externally
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: post-service-route
+  namespace: social-app
+  labels:
+    app: post-service
+spec:
+  to:
+    kind: Service
+    name: post-service
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
